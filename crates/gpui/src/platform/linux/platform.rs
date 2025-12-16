@@ -107,6 +107,7 @@ pub trait LinuxClient {
         handle: AnyWindowHandle,
         options: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>>;
+
     fn set_cursor_style(&self, style: CursorStyle);
     fn open_uri(&self, uri: &str);
     fn reveal_path(&self, path: PathBuf);
@@ -123,6 +124,16 @@ pub trait LinuxClient {
         &self,
     ) -> impl Future<Output = Option<ashpd::WindowIdentifier>> + Send + 'static {
         std::future::ready::<Option<ashpd::WindowIdentifier>>(None)
+    }
+
+    fn attach_window(
+        &self,
+        _handle: AnyWindowHandle,
+        _external_handle: crate::ExternalWindowHandle,
+    ) -> anyhow::Result<Box<dyn PlatformWindow>> {
+        Err(anyhow::anyhow!(
+            "External window mode not supported on this Linux compositor"
+        ))
     }
 }
 

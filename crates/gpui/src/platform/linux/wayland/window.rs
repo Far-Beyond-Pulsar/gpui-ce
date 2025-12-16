@@ -10,7 +10,7 @@ use blade_graphics as gpu;
 use collections::HashMap;
 use futures::channel::oneshot::Receiver;
 
-use raw_window_handle as rwh;
+use raw_window_handle::{self as rwh, RawWindowHandle};
 use wayland_backend::client::ObjectId;
 use wayland_client::WEnum;
 use wayland_client::{Proxy, protocol::wl_surface};
@@ -26,11 +26,11 @@ use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::{
-    AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
-    PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowControls, WindowDecorations, WindowParams,
-    layer_shell::LayerShellNotSupportedError, px, size,
+    AnyWindowHandle, Bounds, Decorations, ExternalWindowHandle, Globals, GpuSpecs, Modifiers,
+    Output, Pixels, PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel,
+    RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+    WindowParams, layer_shell::LayerShellNotSupportedError, px, size,
 };
 use crate::{
     Capslock,
@@ -478,6 +478,66 @@ impl WaylandWindow {
         });
 
         // Kick things off
+        surface.commit();
+
+        Ok((this, surface.id()))
+    }
+
+    pub fn attach(
+        handle: AnyWindowHandle,
+        external_handle: ExternalWindowHandle,
+        globals: Globals,
+        gpu_context: &BladeContext,
+        client: WaylandClientStatePtr,
+        appearance: WindowAppearance,
+    ) -> anyhow::Result<(Self, ObjectId)> {
+        let RawWindowHandle::Wayland(_) = external_handle.handle else {
+            return Err(anyhow::anyhow!(
+                "Invalid external window handle for Wayland"
+            ));
+        };
+
+        let surface = globals.compositor.create_surface(&globals.qh, ());
+
+        if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
+            fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
+        }
+
+        let viewport = globals
+            .viewporter
+            .as_ref()
+            .map(|x| x.get_viewport(&surface, &globals.qh, ()));
+
+        let params = WindowParams {
+            bounds: external_handle.bounds,
+            titlebar: None,
+            focus: false,
+            show: true,
+            kind: WindowKind::Normal,
+            is_movable: false,
+            is_resizable: false,
+            is_minimizable: false,
+            display_id: None,
+            window_min_size: None,
+        };
+
+        let surface_state = WaylandSurfaceState::new(&surface, &globals, &params, None)?;
+
+        let this = Self(WaylandWindowStatePtr {
+            state: Rc::new(RefCell::new(WaylandWindowState::new(
+                handle,
+                surface.clone(),
+                surface_state,
+                appearance,
+                viewport,
+                client,
+                globals,
+                gpu_context,
+                params,
+            )?)),
+            callbacks: Rc::new(RefCell::new(Callbacks::default())),
+        });
+
         surface.commit();
 
         Ok((this, surface.id()))

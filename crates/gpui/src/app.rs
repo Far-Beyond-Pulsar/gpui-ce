@@ -36,13 +36,13 @@ use crate::InspectorElementRegistry;
 use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Asset,
     AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle, DispatchPhase, DisplayId,
-    EventEmitter, FocusHandle, FocusMap, ForegroundExecutor, Global, KeyBinding, KeyContext,
-    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority,
-    PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
-    RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
-    Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance, WindowHandle, WindowId,
-    WindowInvalidator,
+    EventEmitter, ExternalWindowHandle, FocusHandle, FocusMap, ForegroundExecutor, Global,
+    KeyBinding, KeyContext, Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu,
+    PathPromptOptions, Pixels, Platform, PlatformDisplay, PlatformKeyboardLayout,
+    PlatformKeyboardMapper, Point, Priority, PromptBuilder, PromptButton, PromptHandle,
+    PromptLevel, Render, RenderImage, RenderablePromptHandle, Reservation, ScreenCaptureSource,
+    SharedString, SubscriberSet, Subscription, SvgRenderer, Task, TextSystem, Window,
+    WindowAppearance, WindowHandle, WindowId, WindowInvalidator,
     colors::{Colors, GlobalColors},
     current_platform, hash, init_app_menus,
 };
@@ -1015,6 +1015,43 @@ impl App {
 
                     cx.window_handles.insert(id, window.handle);
                     cx.windows.get_mut(id).unwrap().replace(Box::new(window));
+                    Ok(handle)
+                }
+                Err(e) => {
+                    cx.windows.remove(id);
+                    Err(e)
+                }
+            }
+        })
+    }
+
+    /// Attaches to an existing external window with the given handle, using the root view returned by the given function.
+    pub fn attach_window<V: 'static + Render>(
+        &mut self,
+        external_handle: ExternalWindowHandle,
+        build_root_view: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
+    ) -> anyhow::Result<WindowHandle<V>> {
+        self.update(|cx| {
+            let id = cx.windows.insert(None);
+            let handle = WindowHandle::new(id);
+
+            match Window::attach(handle.into(), external_handle, cx) {
+                Ok(mut window) => {
+                    cx.window_update_stack.push(id);
+                    
+                    let root_view = build_root_view(&mut window, cx);
+                    
+                    cx.window_update_stack.pop();
+
+                    window.root.replace(root_view.into());
+                    window.defer(cx, |window: &mut Window, cx| window.appearance_changed(cx));
+
+                    let clear = window.draw(cx);
+                    clear.clear();
+
+                    cx.window_handles.insert(id, window.handle);
+                    cx.windows.get_mut(id).unwrap().replace(Box::new(window));
+
                     Ok(handle)
                 }
                 Err(e) => {

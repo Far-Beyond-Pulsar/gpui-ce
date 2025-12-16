@@ -5,19 +5,19 @@ use crate::{
     AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
     Context, Corners, CursorStyle, Decorations, DevicePixels, DispatchActionListener,
     DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
-    FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero,
-    KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId,
-    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent,
-    MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
-    PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
-    Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
-    ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubscriberSet,
-    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
-    TextStyle, TextStyleRefinement, TransformationMatrix, Underline, UnderlineStyle,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
-    WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, px, rems, size,
-    transparent_black,
+    ExternalWindowHandle, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla,
+    InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
+    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
+    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
+    Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
+    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+    StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
+    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
+    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    point, prelude::*, px, rems, size, transparent_black,
 };
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
@@ -1255,6 +1255,292 @@ impl Window {
         if let Some(app_id) = app_id {
             platform_window.set_app_id(&app_id);
         }
+
+        platform_window.map_window().unwrap();
+
+        Ok(Window {
+            handle,
+            invalidator,
+            removed: false,
+            platform_window,
+            display_id,
+            sprite_atlas,
+            text_system,
+            rem_size: px(16.),
+            rem_size_override_stack: SmallVec::new(),
+            viewport_size: content_size,
+            layout_engine: Some(TaffyLayoutEngine::new()),
+            root: None,
+            element_id_stack: SmallVec::default(),
+            text_style_stack: Vec::new(),
+            rendered_entity_stack: Vec::new(),
+            element_offset_stack: Vec::new(),
+            content_mask_stack: Vec::new(),
+            element_opacity: 1.0,
+            requested_autoscroll: None,
+            rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+            next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+            next_frame_callbacks,
+            next_hitbox_id: HitboxId(0),
+            next_tooltip_id: TooltipId::default(),
+            tooltip_bounds: None,
+            dirty_views: FxHashSet::default(),
+            focus_listeners: SubscriberSet::new(),
+            focus_lost_listeners: SubscriberSet::new(),
+            default_prevented: true,
+            mouse_position,
+            mouse_hit_test: HitTest::default(),
+            modifiers,
+            capslock,
+            scale_factor,
+            bounds_observers: SubscriberSet::new(),
+            appearance,
+            appearance_observers: SubscriberSet::new(),
+            active,
+            hovered,
+            needs_present,
+            last_input_timestamp,
+            last_input_modality: InputModality::Mouse,
+            refreshing: false,
+            activation_observers: SubscriberSet::new(),
+            focus: None,
+            focus_enabled: true,
+            pending_input: None,
+            pending_modifier: ModifierState::default(),
+            pending_input_observers: SubscriberSet::new(),
+            prompt: None,
+            client_inset: None,
+            image_cache_stack: Vec::new(),
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            inspector: None,
+        })
+    }
+
+    pub(crate) fn attach(
+        handle: AnyWindowHandle,
+        external_handle: ExternalWindowHandle,
+        cx: &mut App,
+    ) -> Result<Self> {
+        let mut platform_window = cx.platform.attach_window(handle, external_handle)?;
+
+        platform_window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+
+        let tab_bar_visible = platform_window.tab_bar_visible();
+        SystemWindowTabController::init_visible(cx, tab_bar_visible);
+        if let Some(tabs) = platform_window.tabbed_windows() {
+            SystemWindowTabController::add_tab(cx, handle.window_id(), tabs);
+        }
+
+        let display_id = platform_window.display().map(|display| display.id());
+        let sprite_atlas = platform_window.sprite_atlas();
+        let mouse_position = platform_window.mouse_position();
+        let modifiers = platform_window.modifiers();
+        let capslock = platform_window.capslock();
+        let content_size = platform_window.content_size();
+        let scale_factor = platform_window.scale_factor();
+        let appearance = platform_window.appearance();
+        let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
+        let invalidator = WindowInvalidator::new();
+        let active = Rc::new(Cell::new(platform_window.is_active()));
+        let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
+        let needs_present = Rc::new(Cell::new(false));
+        let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
+        let last_input_timestamp = Rc::new(Cell::new(Instant::now()));
+
+        platform_window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+
+        platform_window.on_close(Box::new({
+            let window_id = handle.window_id();
+            let mut cx = cx.to_async();
+            move || {
+                let _ = handle.update(&mut cx, |_, window, _| window.remove_window());
+                let _ = cx.update(|cx| {
+                    SystemWindowTabController::remove_tab(cx, window_id);
+                });
+            }
+        }));
+        platform_window.on_request_frame(Box::new({
+            let mut cx = cx.to_async();
+            let invalidator = invalidator.clone();
+            let active = active.clone();
+            let needs_present = needs_present.clone();
+            let next_frame_callbacks = next_frame_callbacks.clone();
+            let last_input_timestamp = last_input_timestamp.clone();
+            move |request_frame_options| {
+                let next_frame_callbacks = next_frame_callbacks.take();
+                if !next_frame_callbacks.is_empty() {
+                    handle
+                        .update(&mut cx, |_, window, cx| {
+                            for callback in next_frame_callbacks {
+                                callback(window, cx);
+                            }
+                        })
+                        .log_err();
+                }
+
+                // Keep presenting the current scene for 1 extra second since the
+                // last input to prevent the display from underclocking the refresh rate.
+                let needs_present = request_frame_options.require_presentation
+                    || needs_present.get()
+                    || (active.get()
+                        && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
+
+                if invalidator.is_dirty() || request_frame_options.force_render {
+                    measure("frame duration", || {
+                        handle
+                            .update(&mut cx, |_, window, cx| {
+                                let arena_clear_needed = window.draw(cx);
+                                window.present();
+                                // drop the arena elements after present to reduce latency
+                                arena_clear_needed.clear();
+                            })
+                            .log_err();
+                    })
+                } else if needs_present {
+                    handle
+                        .update(&mut cx, |_, window, _| window.present())
+                        .log_err();
+                }
+
+                handle
+                    .update(&mut cx, |_, window, _| {
+                        window.complete_frame();
+                    })
+                    .log_err();
+            }
+        }));
+        platform_window.on_resize(Box::new({
+            let mut cx = cx.to_async();
+            move |_, _| {
+                handle
+                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
+                    .log_err();
+            }
+        }));
+        platform_window.on_moved(Box::new({
+            let mut cx = cx.to_async();
+            move || {
+                handle
+                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
+                    .log_err();
+            }
+        }));
+        platform_window.on_appearance_changed(Box::new({
+            let mut cx = cx.to_async();
+            move || {
+                handle
+                    .update(&mut cx, |_, window, cx| window.appearance_changed(cx))
+                    .log_err();
+            }
+        }));
+        platform_window.on_active_status_change(Box::new({
+            let mut cx = cx.to_async();
+            move |active| {
+                handle
+                    .update(&mut cx, |_, window, cx| {
+                        window.active.set(active);
+                        window.modifiers = window.platform_window.modifiers();
+                        window.capslock = window.platform_window.capslock();
+                        window
+                            .activation_observers
+                            .clone()
+                            .retain(&(), |callback| callback(window, cx));
+
+                        window.bounds_changed(cx);
+                        window.refresh();
+
+                        SystemWindowTabController::update_last_active(cx, window.handle.id);
+                    })
+                    .log_err();
+            }
+        }));
+        platform_window.on_hover_status_change(Box::new({
+            let mut cx = cx.to_async();
+            move |active| {
+                handle
+                    .update(&mut cx, |_, window, _| {
+                        window.hovered.set(active);
+                        window.refresh();
+                    })
+                    .log_err();
+            }
+        }));
+        platform_window.on_input({
+            let mut cx = cx.to_async();
+            Box::new(move |event| {
+                handle
+                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
+                    .log_err()
+                    .unwrap_or(DispatchEventResult::default())
+            })
+        });
+        platform_window.on_hit_test_window_control({
+            let mut cx = cx.to_async();
+            Box::new(move || {
+                handle
+                    .update(&mut cx, |_, window, _cx| {
+                        for (area, hitbox) in &window.rendered_frame.window_control_hitboxes {
+                            if window.mouse_hit_test.ids.contains(&hitbox.id) {
+                                return Some(*area);
+                            }
+                        }
+                        None
+                    })
+                    .log_err()
+                    .unwrap_or(None)
+            })
+        });
+        platform_window.on_move_tab_to_new_window({
+            let mut cx = cx.to_async();
+            Box::new(move || {
+                handle
+                    .update(&mut cx, |_, _window, cx| {
+                        SystemWindowTabController::move_tab_to_new_window(cx, handle.window_id());
+                    })
+                    .log_err();
+            })
+        });
+        platform_window.on_merge_all_windows({
+            let mut cx = cx.to_async();
+            Box::new(move || {
+                handle
+                    .update(&mut cx, |_, _window, cx| {
+                        SystemWindowTabController::merge_all_windows(cx, handle.window_id());
+                    })
+                    .log_err();
+            })
+        });
+        platform_window.on_select_next_tab({
+            let mut cx = cx.to_async();
+            Box::new(move || {
+                handle
+                    .update(&mut cx, |_, _window, cx| {
+                        SystemWindowTabController::select_next_tab(cx, handle.window_id());
+                    })
+                    .log_err();
+            })
+        });
+        platform_window.on_select_previous_tab({
+            let mut cx = cx.to_async();
+            Box::new(move || {
+                handle
+                    .update(&mut cx, |_, _window, cx| {
+                        SystemWindowTabController::select_previous_tab(cx, handle.window_id())
+                    })
+                    .log_err();
+            })
+        });
+        platform_window.on_toggle_tab_bar({
+            let mut cx = cx.to_async();
+            Box::new(move || {
+                handle
+                    .update(&mut cx, |_, window, cx| {
+                        let tab_bar_visible = window.platform_window.tab_bar_visible();
+                        SystemWindowTabController::set_visible(cx, tab_bar_visible);
+                    })
+                    .log_err();
+            })
+        });
 
         platform_window.map_window().unwrap();
 

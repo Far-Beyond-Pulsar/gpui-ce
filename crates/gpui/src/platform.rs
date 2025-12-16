@@ -211,6 +211,16 @@ pub(crate) trait Platform: 'static {
         options: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>>;
 
+    fn attach_window(
+        &self,
+        _handle: AnyWindowHandle,
+        _external_handle: ExternalWindowHandle,
+    ) -> anyhow::Result<Box<dyn PlatformWindow>> {
+        Err(anyhow::anyhow!(
+            "External window mode not supported on this platform"
+        ))
+    }
+
     /// Returns the appearance of the application's windows.
     fn window_appearance(&self) -> WindowAppearance;
 
@@ -1948,4 +1958,17 @@ impl From<String> for ClipboardString {
             metadata: None,
         }
     }
+}
+
+/// Wrapper for an external window to render to and receive events - not managed by gpui.
+#[derive(Debug, Clone)]
+pub struct ExternalWindowHandle {
+    /// External window handle.
+    pub handle: raw_window_handle::RawWindowHandle,
+    /// Bounds of the target surface
+    pub bounds: Bounds<Pixels>,
+    /// External window scale factor.
+    pub scale_factor: f32,
+    /// Type-erased surface handle.
+    pub surface_handle: Option<*mut std::ffi::c_void>,
 }

@@ -52,6 +52,7 @@ perf = { path = "tooling/perf" }
 # External crates
 #
 
+raw-window-handle = "0.6.2"
 aho-corasick = "1.1"
 circular-buffer = "1.0"
 any_vec = "0.14"

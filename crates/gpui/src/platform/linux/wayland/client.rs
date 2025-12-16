@@ -748,6 +748,27 @@ impl LinuxClient for WaylandClient {
         Ok(Box::new(window))
     }
 
+    fn attach_window(
+        &self,
+        handle: AnyWindowHandle,
+        external_handle: crate::ExternalWindowHandle,
+    ) -> anyhow::Result<Box<dyn PlatformWindow>> {
+        let mut state = self.0.borrow_mut();
+
+        let (window, surface_id) = WaylandWindow::attach(
+            handle,
+            external_handle,
+            state.globals.clone(),
+            &state.gpu_context,
+            WaylandClientStatePtr(Rc::downgrade(&self.0)),
+            state.common.appearance,
+        )?;
+        
+        state.windows.insert(surface_id, window.0.clone());
+
+        Ok(Box::new(window))
+    }
+
     fn set_cursor_style(&self, style: CursorStyle) {
         let mut state = self.0.borrow_mut();
 
