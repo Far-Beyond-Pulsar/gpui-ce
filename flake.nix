@@ -12,7 +12,7 @@
       flake-utils,
       naersk,
       nixpkgs,
-      rust-overlay
+      rust-overlay,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -81,6 +81,13 @@
               extensions = [ "rust-src" ];
             }
           }/lib/rustlib/src/rust/library";
+
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
+          XDG_SESSION_TYPE = "wayland";
+          shellHook = ''
+            export WAYLAND_DISPLAY=''${WAYLAND_DISPLAY:-wayland-0}
+            export XDG_RUNTIME_DIR=''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+          '';
 
           nativeBuildInputs =
             with pkgs;
