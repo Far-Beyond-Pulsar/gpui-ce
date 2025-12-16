@@ -11,7 +11,27 @@ use refineable::Refineable;
 pub enum SurfaceSource {
     /// A macOS image buffer from CoreVideo
     #[cfg(target_os = "macos")]
-    Surface(CVPixelBuffer),
+    ImageBuffer(CVPixelBuffer),
+    /// Windows shared texture handle
+    #[cfg(target_os = "windows")]
+    SharedTexture {
+        /// Native handle to the shared texture
+        nt_handle: isize,
+        /// Width of the texture in pixels
+        width: u32,
+        /// Height of the texture in pixels
+        height: u32,
+    },
+    /// Linux DMA-BUF file descriptor
+    #[cfg(target_os = "linux")]
+    DmaBuf {
+        /// File descriptor for the DMA-BUF
+        fd: i32,
+        /// Width of the texture in pixels
+        width: u32,
+        /// Height of the texture in pixels
+        height: u32,
+    },
 }
 
 #[cfg(target_os = "macos")]
